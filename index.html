@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RifqyLookup Ultimate</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans min-h-screen flex flex-col">
+
+    <div class="bg-indigo-700 text-white py-8 shadow-lg">
+        <div class="container mx-auto px-4 text-center">
+            <h1 class="text-4xl font-bold mb-2"><i class="fas fa-search-location mr-2"></i>RifqyLookup</h1>
+            <p class="text-indigo-200">DNS • Subdomains • GeoIP • Whois</p>
+        </div>
+    </div>
+
+    <div class="container mx-auto px-4 -mt-6">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-2xl mx-auto border border-gray-100">
+            <div class="flex flex-col md:flex-row gap-3">
+                <input type="text" id="domainInput" placeholder="masukkan domain (cth: google.com)" 
+                    class="w-full p-4 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-lg">
+                <button onclick="fetchData()" 
+                    class="bg-indigo-600 hover:bg-indigo-800 text-white px-8 py-4 rounded-lg font-bold transition flex items-center justify-center">
+                    <span id="btnText">Analisis</span>
+                    <i id="btnIcon" class="fas fa-bolt ml-2"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="resultArea" class="container mx-auto px-4 py-10 max-w-5xl hidden">
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-green-500">
+                <h2 class="text-xl font-bold mb-4 text-gray-700"><i class="fas fa-globe-asia mr-2"></i>Lokasi Server (GeoIP)</h2>
+                <div id="geoContent" class="space-y-2 text-sm"></div>
+            </div>
+
+            <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-blue-500">
+                <h2 class="text-xl font-bold mb-4 text-gray-700"><i class="fas fa-network-wired mr-2"></i>DNS Records</h2>
+                <div id="dnsContent" class="space-y-3 h-64 overflow-y-auto pr-2"></div>
+            </div>
+
+            <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-purple-500">
+                <h2 class="text-xl font-bold mb-4 text-gray-700"><i class="fas fa-sitemap mr-2"></i>Subdomains (Max 15)</h2>
+                <ul id="subContent" class="list-disc list-inside text-sm text-blue-600 space-y-1"></ul>
+            </div>
+
+            <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-yellow-500 md:col-span-2">
+                <h2 class="text-xl font-bold mb-4 text-gray-700"><i class="fas fa-id-card mr-2"></i>Whois Data</h2>
+                <pre id="whoisContent" class="bg-gray-100 p-4 rounded text-xs overflow-x-auto whitespace-pre-wrap font-mono h-64"></pre>
+            </div>
+
+        </div>
+    </div>
+
+    <footer class="mt-auto py-6 text-center text-gray-500 text-sm">
+        <p>API by Vercel | Frontend by GitHub Pages</p>
+    </footer>
+
+    <script>
+        // GANTI URL INI DENGAN URL VERCEL KAMU NANTI!
+        // Contoh: const API_URL = "https://rifqylookup-api.vercel.app/api/lookup";
+        const API_URL = "GANTI_DENGAN_URL_VERCEL_KAMU/api/lookup"; 
+
+        async function fetchData() {
+            const domain = document.getElementById('domainInput').value;
+            const btnText = document.getElementById('btnText');
+            const resultArea = document.getElementById('resultArea');
+            
+            if(!domain) return alert("Isi domain dulu bos!");
+
+            // UI Loading State
+            btnText.innerText = "Loading...";
+            resultArea.classList.add('hidden');
+
+            try {
+                // PENTING: Jika API_URL masih default, peringatkan user
+                if (API_URL.includes("GANTI_DENGAN")) {
+                    alert("Kamu belum mengganti API_URL di script index.html!");
+                    throw new Error("URL API belum diset");
+                }
+
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain: domain })
+                });
+
+                const data = await response.json();
+                
+                if(data.error) throw new Error(data.error);
+
+                // 1. Render GeoIP
+                const geo = data.geoip;
+                document.getElementById('geoContent').innerHTML = `
+                    <p><strong>IP:</strong> ${geo.query || '-'}</p>
+                    <p><strong>Negara:</strong> ${geo.country || '-'} (${geo.countryCode})</p>
+                    <p><strong>Kota:</strong> ${geo.city || '-'}</p>
+                    <p><strong>ISP:</strong> ${geo.isp || '-'}</p>
+                    <p><strong>Timezone:</strong> ${geo.timezone || '-'}</p>
+                `;
+
+                // 2. Render DNS
+                const dnsBox = document.getElementById('dnsContent');
+                dnsBox.innerHTML = '';
+                for (const [type, recs] of Object.entries(data.dns)) {
+                    if(recs.length) {
+                        dnsBox.innerHTML += `
+                            <div class="border-b pb-2">
+                                <span class="font-bold text-xs bg-gray-200 px-2 py-1 rounded">${type}</span>
+                                <div class="mt-1 text-xs font-mono text-gray-600 break-all">${recs.join('<br>')}</div>
+                            </div>
+                        `;
+                    }
+                }
+
+                // 3. Render Subdomains
+                const subBox = document.getElementById('subContent');
+                subBox.innerHTML = data.subdomains.map(s => 
+                    `<li><a href="http://${s}" target="_blank" class="hover:underline">${s}</a></li>`
+                ).join('') || '<li class="text-gray-400">Tidak ditemukan</li>';
+
+                // 4. Render Whois
+                document.getElementById('whoisContent').innerText = data.whois;
+
+                // Tampilkan hasil
+                resultArea.classList.remove('hidden');
+
+            } catch (err) {
+                alert("Error: " + err.message);
+            } finally {
+                btnText.innerText = "Analisis";
+            }
+        }
+    </script>
+</body>
+</html>
