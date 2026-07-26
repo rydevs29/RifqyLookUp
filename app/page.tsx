@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from 'react';
-import { Search, Globe, Server, ShieldCheck, Activity, AlertTriangle, Lock, Bug, FileText } from 'lucide-react';
+import { Search, Globe, Server, ShieldCheck, Activity, AlertTriangle, Lock, Bug, FileText, MailCheck, Map } from 'lucide-react';
 import useSWR from 'swr';
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
@@ -83,7 +83,45 @@ export default function Home() {
                   <span className="text-slate-500 flex items-center gap-2"><ShieldCheck className="w-4 h-4"/> WAF</span>
                   <span className="font-medium">{data.web.waf_detected}</span>
                 </li>
+                <li className="flex justify-between border-b border-slate-50 pb-2">
+                  <span className="text-slate-500 flex items-center gap-2"><Map className="w-4 h-4"/> Sitemap.xml</span>
+                  <span className={`font-medium ${data.web.has_sitemap ? 'text-emerald-600' : 'text-slate-400'}`}>
+                    {data.web.has_sitemap ? 'Ditemukan' : 'Tidak Ditemukan'}
+                  </span>
+                </li>
               </ul>
+            </div>
+
+            {/* Email Security (SPF & DMARC) */}
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
+                <MailCheck className="w-5 h-5 text-indigo-500" />
+                <h3 className="text-lg font-semibold">Keamanan Email (Anti-Spoofing)</h3>
+              </div>
+              <div className="space-y-4 text-sm">
+                <div>
+                  <p className="text-slate-500 mb-1 flex justify-between">
+                    <span>SPF Record</span>
+                    <span className={data.email_security.spf ? 'text-emerald-600 font-medium' : 'text-red-500 font-medium'}>
+                      {data.email_security.spf ? 'Terlindungi' : 'Rentan'}
+                    </span>
+                  </p>
+                  <p className="font-mono text-xs bg-slate-50 p-2 rounded border border-slate-100 break-all">
+                    {data.email_security.spf || 'Tidak ada record SPF. Domain bisa dipalsukan.'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-slate-500 mb-1 flex justify-between">
+                    <span>DMARC Record</span>
+                    <span className={data.email_security.dmarc ? 'text-emerald-600 font-medium' : 'text-red-500 font-medium'}>
+                      {data.email_security.dmarc ? 'Terlindungi' : 'Rentan'}
+                    </span>
+                  </p>
+                  <p className="font-mono text-xs bg-slate-50 p-2 rounded border border-slate-100 break-all">
+                    {data.email_security.dmarc || 'Tidak ada record DMARC.'}
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* SSL/TLS Checker */}
@@ -141,13 +179,13 @@ export default function Home() {
             </div>
 
             {/* Robots.txt Extractor */}
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 md:col-span-2">
               <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
                 <FileText className="w-5 h-5 text-amber-500" />
-                <h3 className="text-lg font-semibold">Robots.txt</h3>
+                <h3 className="text-lg font-semibold">Robots.txt Extractor</h3>
               </div>
               {data.files.robots_txt ? (
-                <pre className="text-xs bg-slate-900 text-slate-300 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
+                <pre className="text-xs bg-slate-900 text-slate-300 p-4 rounded-xl overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">
                   {data.files.robots_txt}
                 </pre>
               ) : (
