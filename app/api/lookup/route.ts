@@ -135,8 +135,9 @@ export async function GET(request: Request) {
     const crtPromise = fetch(`https://crt.sh/?q=%25.${cleanTarget}&output=json`, { signal: AbortSignal.timeout(4000) })
       .then(res => res.ok ? res.json() : [])
       .then(data => {
-         const subs = data.map((entry: any) => entry.name_value.split('\n')).flat();
-         return [...new Set(subs)].filter((sub: string) => sub.endsWith(cleanTarget)).slice(0, 30) as string[]; // Maksimal 30 agar UI rapi
+         // PERBAIKAN: Memaksa data menjadi String array dan memakai Array.from() agar aman dari error TypeScript
+         const subs: string[] = data.map((entry: any) => String(entry.name_value).split('\n')).flat();
+         return Array.from(new Set(subs)).filter((sub: string) => sub.endsWith(cleanTarget)).slice(0, 30);
       }).catch(() => [] as string[]);
 
     const whoisPromise = fetch(`https://rdap.org/domain/${cleanTarget}`, { signal: AbortSignal.timeout(4000) })
