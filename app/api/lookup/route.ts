@@ -45,7 +45,8 @@ export async function GET(request: Request) {
     }
 
     // 3. HTTP Headers, Robots.txt & Sitemap
-    let headers = {};
+    // PERBAIKAN: Memberitahu TypeScript bahwa ini adalah tipe objek yang berisi string
+    let headers: Record<string, string> = {};
     let isHttps = false;
     let robotsTxt = null;
     let hasSitemap = false;
@@ -67,8 +68,9 @@ export async function GET(request: Request) {
       // Fallback
     }
 
-    const server = headers['server' as keyof typeof headers] || 'Tidak Terdeteksi';
-    const wafDetected = server.toString().toLowerCase().includes('cloudflare') ? 'Cloudflare' : 'Tidak Terdeteksi';
+    // PERBAIKAN: Menggunakan fungsi String() yang lebih kebal error dibanding .toString()
+    const server = headers['server'] || 'Tidak Terdeteksi';
+    const wafDetected = String(server).toLowerCase().includes('cloudflare') ? 'Cloudflare' : 'Tidak Terdeteksi';
 
     // 4. SSL/TLS Checker
     const sslInfo = await checkSSL(cleanTarget);
