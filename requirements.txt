@@ -1,5 +1,0 @@
-Flask
-flask-cors
-dnspython
-requests
-python-whois
