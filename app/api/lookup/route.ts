@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import dns from 'dns/promises';
 import tls from 'tls';
+import net from 'net';
 
+// Fungsi bantuan untuk mengecek SSL/TLS
 const checkSSL = (host: string): Promise<any> => {
   return new Promise((resolve) => {
     const socket = tls.connect({ host, port: 443, servername: host }, () => {
@@ -15,6 +17,29 @@ const checkSSL = (host: string): Promise<any> => {
       });
     });
     socket.on('error', () => resolve(null));
+  });
+};
+
+// FITUR BARU: Fungsi bantuan untuk Port Scanner (dengan timeout super cepat)
+const checkPort = (port: number, host: string): Promise<number | null> => {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(1500); // Batas maksimal 1.5 detik per port agar Vercel tidak error
+    
+    socket.on('connect', () => {
+      socket.destroy();
+      resolve(port);
+    });
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve(null);
+    });
+    socket.on('error', () => {
+      socket.destroy();
+      resolve(null);
+    });
+    
+    socket.connect(port, host);
   });
 };
 
@@ -44,31 +69,44 @@ export async function GET(request: Request) {
       // DMARC tidak ditemukan
     }
 
-    // 3. HTTP Headers, Robots.txt & Sitemap
-    // PERBAIKAN: Memberitahu TypeScript bahwa ini adalah tipe objek yang berisi string
+    // 3. HTTP Headers, Tech Stack, Robots.txt & Sitemap
     let headers: Record<string, string> = {};
     let isHttps = false;
     let robotsTxt = null;
     let hasSitemap = false;
+    let techStack: string[] = []; // FITUR BARU: Penampung Tech Stack
     
     try {
-      const response = await fetch(`https://${cleanTarget}`, { method: 'HEAD', redirect: 'follow' });
+      // Menggunakan GET untuk mengambil HTML web demi mendeteksi Tech Stack
+      const response = await fetch(`https://${cleanTarget}`, { method: 'GET', redirect: 'follow', signal: AbortSignal.timeout(3000) });
       headers = Object.fromEntries(response.headers.entries());
       isHttps = true;
+
+      // FITUR BARU: Deteksi Tech Stack sederhana melalui kode HTML
+      const html = await response.text();
+      const htmlLower = html.toLowerCase();
       
-      const robotsRes = await fetch(`https://${cleanTarget}/robots.txt`);
+      if (htmlLower.includes('wp-content')) techStack.push('WordPress');
+      if (htmlLower.includes('id="__next"') || htmlLower.includes('/_next/')) techStack.push('Next.js');
+      else if (htmlLower.includes('react') || htmlLower.includes('id="root"')) techStack.push('React');
+      if (htmlLower.includes('laravel_session') || htmlLower.includes('laravel')) techStack.push('Laravel');
+      if (htmlLower.includes('bootstrap')) techStack.push('Bootstrap');
+      if (htmlLower.includes('tailwind')) techStack.push('Tailwind CSS');
+      if (headers['x-powered-by']) techStack.push(`${headers['x-powered-by']}`);
+      if (techStack.length === 0) techStack.push('Tidak Terdeteksi');
+      
+      const robotsRes = await fetch(`https://${cleanTarget}/robots.txt`, { signal: AbortSignal.timeout(2000) });
       if (robotsRes.ok) {
         const text = await robotsRes.text();
         robotsTxt = text.slice(0, 500) + (text.length > 500 ? '\n...[terpotong]' : '');
       }
 
-      const sitemapRes = await fetch(`https://${cleanTarget}/sitemap.xml`, { method: 'HEAD' });
+      const sitemapRes = await fetch(`https://${cleanTarget}/sitemap.xml`, { method: 'HEAD', signal: AbortSignal.timeout(2000) });
       if (sitemapRes.ok) hasSitemap = true;
     } catch (e) {
       // Fallback
     }
 
-    // PERBAIKAN: Menggunakan fungsi String() yang lebih kebal error dibanding .toString()
     const server = headers['server'] || 'Tidak Terdeteksi';
     const wafDetected = String(server).toLowerCase().includes('cloudflare') ? 'Cloudflare' : 'Tidak Terdeteksi';
 
@@ -93,11 +131,53 @@ export async function GET(request: Request) {
       }
     }
 
+    // FITUR BARU: Subdomain, WHOIS, dan Port Scanner (Dieksekusi serentak agar cepat)
+    const crtPromise = fetch(`https://crt.sh/?q=%25.${cleanTarget}&output=json`, { signal: AbortSignal.timeout(4000) })
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+         const subs = data.map((entry: any) => entry.name_value.split('\n')).flat();
+         return [...new Set(subs)].filter((sub: string) => sub.endsWith(cleanTarget)).slice(0, 30) as string[]; // Maksimal 30 agar UI rapi
+      }).catch(() => [] as string[]);
+
+    const whoisPromise = fetch(`https://rdap.org/domain/${cleanTarget}`, { signal: AbortSignal.timeout(4000) })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+         if (!data) return null;
+         const registrarEnt = data.entities?.find((e: any) => e.roles?.includes('registrar'));
+         const registrarName = registrarEnt?.vcardArray?.[1]?.find((v: any) => v[0] === 'fn')?.[3] || 'Unknown';
+         const events = data.events || [];
+         const created = events.find((e: any) => e.eventAction === 'registration')?.eventDate;
+         const expired = events.find((e: any) => e.eventAction === 'expiration')?.eventDate;
+         return {
+           registrar: registrarName,
+           creation_date: created ? new Date(created).toLocaleDateString('id-ID') : 'N/A',
+           expiration_date: expired ? new Date(expired).toLocaleDateString('id-ID') : 'N/A'
+         };
+      }).catch(() => null);
+
+    const portsToCheck = [21, 22, 80, 443, 3306];
+    const portPromises = Promise.all(portsToCheck.map(port => checkPort(port, cleanTarget)));
+
+    // Menunggu hasil eksekusi serentak
+    const [subdomains, whois, openPortsRaw] = await Promise.all([crtPromise, whoisPromise, portPromises]);
+    const open_ports = openPortsRaw.filter(p => p !== null);
+
     return NextResponse.json({
       target: cleanTarget,
-      network: { ip_addresses: recordsA },
+      subdomains: subdomains,
+      whois: whois,
+      network: { 
+        ip_addresses: recordsA,
+        open_ports: open_ports 
+      },
       email_security: { spf: spfRecord, dmarc: dmarcRecord },
-      web: { https_enabled: isHttps, server_software: server, waf_detected: wafDetected, has_sitemap: hasSitemap },
+      web: { 
+        https_enabled: isHttps, 
+        server_software: server, 
+        waf_detected: wafDetected, 
+        has_sitemap: hasSitemap,
+        tech_stack: techStack
+      },
       ssl: sslInfo,
       files: { robots_txt: robotsTxt },
       security: { virustotal }
