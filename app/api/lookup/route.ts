@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import dns from 'dns/promises';
 import tls from 'tls';
 
-// Fungsi bantuan untuk mengecek SSL/TLS
 const checkSSL = (host: string): Promise<any> => {
   return new Promise((resolve) => {
     const socket = tls.connect({ host, port: 443, servername: host }, () => {
@@ -32,23 +31,38 @@ export async function GET(request: Request) {
   try {
     // 1. Network Recon (DNS)
     const recordsA = await dns.resolve4(cleanTarget).catch(() => []);
+    const recordsTXTRaw = await dns.resolveTxt(cleanTarget).catch(() => []);
+    const txtStrings = recordsTXTRaw.map(txt => txt.join(''));
     
-    // 2. HTTP Headers & Robots.txt
+    // 2. Email Security (SPF & DMARC)
+    const spfRecord = txtStrings.find(txt => txt.startsWith('v=spf1')) || null;
+    let dmarcRecord = null;
+    try {
+      const dmarcTXT = await dns.resolveTxt(`_dmarc.${cleanTarget}`);
+      dmarcRecord = dmarcTXT.map(txt => txt.join('')).find(txt => txt.startsWith('v=DMARC1')) || null;
+    } catch (e) {
+      // DMARC tidak ditemukan
+    }
+
+    // 3. HTTP Headers, Robots.txt & Sitemap
     let headers = {};
     let isHttps = false;
     let robotsTxt = null;
+    let hasSitemap = false;
     
     try {
       const response = await fetch(`https://${cleanTarget}`, { method: 'HEAD', redirect: 'follow' });
       headers = Object.fromEntries(response.headers.entries());
       isHttps = true;
       
-      // Ambil Robots.txt
       const robotsRes = await fetch(`https://${cleanTarget}/robots.txt`);
       if (robotsRes.ok) {
         const text = await robotsRes.text();
-        robotsTxt = text.slice(0, 500) + (text.length > 500 ? '\n...[terpotong]' : ''); // Ambil 500 karakter awal
+        robotsTxt = text.slice(0, 500) + (text.length > 500 ? '\n...[terpotong]' : '');
       }
+
+      const sitemapRes = await fetch(`https://${cleanTarget}/sitemap.xml`, { method: 'HEAD' });
+      if (sitemapRes.ok) hasSitemap = true;
     } catch (e) {
       // Fallback
     }
@@ -56,13 +70,12 @@ export async function GET(request: Request) {
     const server = headers['server' as keyof typeof headers] || 'Tidak Terdeteksi';
     const wafDetected = server.toString().toLowerCase().includes('cloudflare') ? 'Cloudflare' : 'Tidak Terdeteksi';
 
-    // 3. SSL/TLS Checker
+    // 4. SSL/TLS Checker
     const sslInfo = await checkSSL(cleanTarget);
 
-    // 4. VirusTotal Malware Check
+    // 5. VirusTotal
     let virustotal = null;
     const vtKey = process.env.VIRUSTOTAL_API_KEY;
-    
     if (vtKey) {
       try {
         const vtRes = await fetch(`https://www.virustotal.com/api/v3/domains/${cleanTarget}`, {
@@ -71,11 +84,7 @@ export async function GET(request: Request) {
         if (vtRes.ok) {
           const vtData = await vtRes.json();
           const stats = vtData.data.attributes.last_analysis_stats;
-          virustotal = {
-            malicious: stats.malicious,
-            suspicious: stats.suspicious,
-            harmless: stats.harmless,
-          };
+          virustotal = { malicious: stats.malicious, suspicious: stats.suspicious, harmless: stats.harmless };
         }
       } catch (e) {
         virustotal = { error: "Gagal menjangkau API VirusTotal" };
@@ -85,7 +94,8 @@ export async function GET(request: Request) {
     return NextResponse.json({
       target: cleanTarget,
       network: { ip_addresses: recordsA },
-      web: { https_enabled: isHttps, server_software: server, waf_detected: wafDetected },
+      email_security: { spf: spfRecord, dmarc: dmarcRecord },
+      web: { https_enabled: isHttps, server_software: server, waf_detected: wafDetected, has_sitemap: hasSitemap },
       ssl: sslInfo,
       files: { robots_txt: robotsTxt },
       security: { virustotal }
