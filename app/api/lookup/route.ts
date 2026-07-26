@@ -1,5 +1,23 @@
 import { NextResponse } from 'next/server';
 import dns from 'dns/promises';
+import tls from 'tls';
+
+// Fungsi bantuan untuk mengecek SSL/TLS
+const checkSSL = (host: string): Promise<any> => {
+  return new Promise((resolve) => {
+    const socket = tls.connect({ host, port: 443, servername: host }, () => {
+      const cert = socket.getPeerCertificate();
+      socket.end();
+      resolve({
+        valid: socket.authorized,
+        issuer: cert.issuer?.O || 'Unknown',
+        validFrom: cert.valid_from,
+        validTo: cert.valid_to,
+      });
+    });
+    socket.on('error', () => resolve(null));
+  });
+};
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -9,52 +27,68 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Target domain atau IP wajib diisi.' }, { status: 400 });
   }
 
-  // Membersihkan input (hapus http:// atau https:// jika ada)
   const cleanTarget = target.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split('/')[0];
 
   try {
-    // 1. Informasi DNS & IP (Network Recon)
+    // 1. Network Recon (DNS)
     const recordsA = await dns.resolve4(cleanTarget).catch(() => []);
-    const recordsMX = await dns.resolveMx(cleanTarget).catch(() => []);
-    const recordsTXT = await dns.resolveTxt(cleanTarget).catch(() => []);
-
-    // 2. HTTP Headers & Basic Tech Stack (Web Recon)
+    
+    // 2. HTTP Headers & Robots.txt
     let headers = {};
     let isHttps = false;
+    let robotsTxt = null;
     
     try {
       const response = await fetch(`https://${cleanTarget}`, { method: 'HEAD', redirect: 'follow' });
       headers = Object.fromEntries(response.headers.entries());
       isHttps = true;
+      
+      // Ambil Robots.txt
+      const robotsRes = await fetch(`https://${cleanTarget}/robots.txt`);
+      if (robotsRes.ok) {
+        const text = await robotsRes.text();
+        robotsTxt = text.slice(0, 500) + (text.length > 500 ? '\n...[terpotong]' : ''); // Ambil 500 karakter awal
+      }
     } catch (e) {
-      // Fallback ke HTTP jika HTTPS gagal
-      const response = await fetch(`http://${cleanTarget}`, { method: 'HEAD', redirect: 'follow' }).catch(() => null);
-      if (response) headers = Object.fromEntries(response.headers.entries());
+      // Fallback
     }
 
-    // Ekstraksi Keamanan Dasar dari Header
     const server = headers['server' as keyof typeof headers] || 'Tidak Terdeteksi';
-    const xPoweredBy = headers['x-powered-by' as keyof typeof headers] || 'Tidak Terdeteksi';
+    const wafDetected = server.toString().toLowerCase().includes('cloudflare') ? 'Cloudflare' : 'Tidak Terdeteksi';
+
+    // 3. SSL/TLS Checker
+    const sslInfo = await checkSSL(cleanTarget);
+
+    // 4. VirusTotal Malware Check
+    let virustotal = null;
+    const vtKey = process.env.VIRUSTOTAL_API_KEY;
     
-    // Pengecekan WAF & CORS Sederhana dari Header
-    const corsStatus = headers['access-control-allow-origin' as keyof typeof headers] ? 'Dikonfigurasi' : 'Tidak Dikonfigurasi/Terbuka';
-    const hasCloudflare = server.toString().toLowerCase().includes('cloudflare');
+    if (vtKey) {
+      try {
+        const vtRes = await fetch(`https://www.virustotal.com/api/v3/domains/${cleanTarget}`, {
+          headers: { 'x-apikey': vtKey }
+        });
+        if (vtRes.ok) {
+          const vtData = await vtRes.json();
+          const stats = vtData.data.attributes.last_analysis_stats;
+          virustotal = {
+            malicious: stats.malicious,
+            suspicious: stats.suspicious,
+            harmless: stats.harmless,
+          };
+        }
+      } catch (e) {
+        virustotal = { error: "Gagal menjangkau API VirusTotal" };
+      }
+    }
 
     return NextResponse.json({
       target: cleanTarget,
-      network: {
-        ip_addresses: recordsA,
-        mx_records: recordsMX,
-        txt_records: recordsTXT.map(txt => txt.join(' ')), // Berguna untuk cek SPF/DMARC nanti
-      },
-      web: {
-        https_enabled: isHttps,
-        server_software: server,
-        tech_stack: xPoweredBy,
-        cors_status: corsStatus,
-        waf_detected: hasCloudflare ? 'Cloudflare' : 'Tidak Terdeteksi (via Header)',
-        raw_headers: headers,
-      }
+      network: { ip_addresses: recordsA },
+      web: { https_enabled: isHttps, server_software: server, waf_detected: wafDetected },
+      ssl: sslInfo,
+      files: { robots_txt: robotsTxt },
+      security: { virustotal }
     });
 
   } catch (error) {
