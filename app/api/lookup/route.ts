@@ -132,13 +132,43 @@ export async function GET(request: Request) {
     }
 
     // FITUR BARU: Subdomain, WHOIS, dan Port Scanner (Dieksekusi serentak agar cepat)
-    const crtPromise = fetch(`https://crt.sh/?q=%25.${cleanTarget}&output=json`, { signal: AbortSignal.timeout(4000) })
+    // PERBAIKAN: Menambahkan Cadangan (Fallback API), membersihkan *. dan menambah timeout
+    const crtPromise = fetch(`https://crt.sh/?q=%25.${cleanTarget}&output=json`, { signal: AbortSignal.timeout(6000) })
       .then(res => res.ok ? res.json() : [])
       .then(data => {
-         // PERBAIKAN: Memaksa data menjadi String array dan memakai Array.from() agar aman dari error TypeScript
-         const subs: string[] = data.map((entry: any) => String(entry.name_value).split('\n')).flat();
-         return Array.from(new Set(subs)).filter((sub: string) => sub.endsWith(cleanTarget)).slice(0, 30);
-      }).catch(() => [] as string[]);
+         if (!Array.isArray(data) || data.length === 0) throw new Error('Data crt.sh kosong');
+         
+         const subs: string[] = data.map((entry: any) => {
+           const val = String(entry.name_value || entry.common_name || "");
+           return val.split('\n');
+         }).flat();
+         
+         const cleanedSubs = subs
+           .map(sub => sub.replace(/^\*\./, '').toLowerCase().trim())
+           .filter(sub => sub.endsWith(cleanTarget) && sub !== cleanTarget);
+           
+         const uniqueSubs = Array.from(new Set(cleanedSubs)).slice(0, 30);
+         if (uniqueSubs.length === 0) throw new Error('Tidak ada subdomain valid');
+         return uniqueSubs;
+      })
+      .catch(async () => {
+         // API CADANGAN JIKA CRT.SH GAGAL: HackerTarget
+         try {
+           const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${cleanTarget}`, { signal: AbortSignal.timeout(4000) });
+           if (!htRes.ok) return [] as string[];
+           const text = await htRes.text();
+           
+           if (text.includes('error') || text.includes('API count exceeded')) return [] as string[];
+           
+           const htSubs = text.split('\n')
+             .map(line => line.split(',')[0].toLowerCase().trim())
+             .filter(sub => sub.endsWith(cleanTarget) && sub !== cleanTarget);
+             
+           return Array.from(new Set(htSubs)).slice(0, 30);
+         } catch (e) {
+           return [] as string[];
+         }
+      });
 
     const whoisPromise = fetch(`https://rdap.org/domain/${cleanTarget}`, { signal: AbortSignal.timeout(4000) })
       .then(res => res.ok ? res.json() : null)
